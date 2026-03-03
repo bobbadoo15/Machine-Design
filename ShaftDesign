@@ -1,0 +1,740 @@
+"""
+This program is for the Shaft Design Project for Machine Design.
+
+PURPOSE:
+This program analyzes a rotating shaft subjected to bending, torsion,
+axial, or combined loading. It can:
+
+1) Calculate a required shaft diameter for a desired safety factor.
+2) Calculate a safety factor for a given shaft diameter.
+
+The program considers:
+- Yield failure (Von Mises or conservative approach)
+- Fatigue failure (Goodman relation)
+- Stress concentration effects
+- Surface finish effects
+- Size effects
+- Material strength properties
+
+The program uses the Bisection Method when solving for diameter.
+"""
+
+import numpy as np
+
+def main():
+    """
+    Main driver function for the shaft design project.
+
+    This function:
+    - Collects all user inputs
+    - Determines whether to compute diameter or safety factor
+    - Calls helper functions
+    - Displays final results
+    """
+
+    while True:    
+        # ===================================================================
+        #                    SHAFT CHARACTERISTIC INPUTS 
+        # ===================================================================
+
+        # Measurement system selection (determines unit assumptions)
+        system = input("Enter the measurment system (metric or imperial): ").strip().lower()
+        if system == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+        
+        # Surface finish affects endurance limit correction factor
+        finish = input("Enter the finish of the shaft (ground, machined/cold-drawn, hot-rolled, or as-forged): ").strip().lower()
+        if finish == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+
+        # Type of loading applied to shaft
+        condition = input("Enter the shaft stress condition (bending, torsion, axial, or combined): ").strip().lower()
+        if condition == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+
+        # Initial geometric assumption for stress concentration
+        # Used to estimate Kt and Kts values
+        iter_estimate = input("Enter the stress concentration factor type for Kt and Kts (ring-groove, keyway, wide radius, sharp radius): ").strip().lower()
+        if iter_estimate == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+
+        # ===================================================================
+        #                      MATERIAL PROPERTY INPUTS
+        # ===================================================================
+
+        # Ultimate tensile strength of the material
+        Sut = input("Enter the ultimate tensile strength of the material (in KSI or MPa): ").strip().lower()
+        if Sut == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+        else:            
+            try:
+                Sut = float(Sut)
+            except ValueError:
+                print(f"\n'{Sut}' is not a valid number. Please enter a numeric value for the ultimate tensile strength.\n")
+                continue
+
+        # Yield strength of the material
+        Sy = input("Enter the yield strength of the material (in KSI or MPa): ").strip().lower()
+        if Sy == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+        else:            
+            try:
+                Sy = float(Sy)
+            except ValueError:
+                print(f"\n'{Sy}' is not a valid number. Please enter a numeric value for the yield strength.\n")
+                continue
+
+        # ===================================================================
+        #                          LOADING INPUTS
+        # ===================================================================
+
+        # Alternating bending moment on the shaft
+        Ma = input("Enter the bending moment on the shaft (in lb-in or N-mm): ").strip().lower()
+        if Ma == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+        else:
+            try:
+                Ma = float(Ma)
+            except ValueError:
+                print(f"\n'{Ma}' is not a valid number. Please enter a numeric value for the bending moment.\n")
+                continue
+
+        # Mean torque on the shaft
+        Tm = input("Enter the torque on the shaft (in lb-in or N-mm): ").strip().lower()
+        if Tm == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+        else:
+            try:
+                Tm = float(Tm)
+            except ValueError:
+                print(f"\n'{Tm}' is not a valid number. Please enter a numeric value for the torque.\n")
+                continue
+
+        # ===================================================================
+        #                         ASSUMED CONSANTS
+        # ===================================================================
+
+        Mm = 0 # Assuming no mean bending moment, so the mean normal stress is zero
+        Ta = 0 # Assuming no alternating torque, so the alternating shear stress is zero
+
+        # ===================================================================
+        #            DETERMINING FINDING DIAMETER OR SAFETY FACTOR
+        # ===================================================================
+
+        d_check = input("Do you want to enter a diameter for the shaft? (yes or no): ").strip().lower()
+        if d_check == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+
+        # ===================================================================
+        #       MODE 1: DIAMETER IS PROVIDED --> COMPUTE SAFETY FACTOR
+        # ===================================================================
+
+        if d_check == "yes":
+            d = input("Enter the diameter of the shaft (in in. or mm): ").strip().lower() # Assuming this is the effective diameter
+            if d == "q":
+                print("\nExiting program. Goodbye!\n")
+                break
+            else:
+                try:
+                    d = float(d)
+                except ValueError:
+                    print(f"\n'{d}' is not a valid number. Please enter a numeric value for the diameter of the shaft.\n")
+                    continue
+        
+        # ===================================================================
+        #       MODE 2: SAFETY FACTOR IS PROVIDED --> COMPUTE DIAMETER
+        # ===================================================================
+
+        elif d_check == "no":
+            n = input("Enter the desired safety factor: ").strip().lower()
+            if n == "q":
+                print("\nExiting program. Goodbye!\n")
+                break
+            else:
+                try:
+                    n = float(n)
+                except ValueError:
+                    print(f"\n'{n}' is not a valid number. Please enter a numeric value for the safety factor.\n")
+                    continue
+
+            # Compute diameter using BOTH methods
+            dc = ConservativeDiameter(n, Sut, Sy, condition, system, finish, iter_estimate, Ma, Mm, Ta, Tm)
+            dg = GoodmanDiameter(n, Sut, Sy, condition, system, finish, iter_estimate, Ma, Mm, Ta, Tm)
+
+            # Choose larger (more conservative) diameter for safety
+            d = max(dc, dg)
+            print(f"\nCalculated diameter: {d:.3f}\n")
+
+            break
+        
+        else:
+            print(f"\nError: '{d_check}' is not a valid response. Please enter 'yes' or 'no'.\n")
+            continue
+
+        # ===================================================================
+        #                   SAFETY FACTOR TYPE SELECTION
+        # ===================================================================
+
+        # Yield or fatigue safety factor
+        SF = input("Enter the desired safety factor (yield, fatigue): ").strip().lower()
+        if SF == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+
+        # Type of Safety Factor
+        SFtype = input("Enter the type of safety factor (goodman, von mises, conservative): ").strip().lower()
+        if SFtype == "q":
+            print("\nExiting program. Goodbye!\n")
+            break
+    
+        # ===================================================================
+        #      CALLING CORE CALCULATION FUNCTIONS USING DIAMETER INPUT
+        # ===================================================================
+        Se = EnduranceLimit(Sut, system, finish, condition, d)
+        Kf, Kfs = StressConcentration(condition, system, Sut, iter_estimate, d)
+        sigma_max_prime, sigma_a_prime, sigma_m_prime, A, B, sigma_m, sigma_a = ShaftStresses(Kf, Kfs, Ma, Mm, Ta, Tm, d)
+        ny, nf = SafetyFactor(Sy, sigma_max_prime, sigma_a_prime, sigma_m_prime, SF, SFtype, Se, Sut, sigma_m, sigma_a, d, A, B)
+
+        # ===================================================================
+        #                  DISPLAYING SAFETY FACTOR RESULTS
+        # ===================================================================
+        if SF == "yield" and SFtype == "von mises":
+            print(f"\nVon Mises safety factor against yielding: {ny:.3f}\n\n")
+        elif SF == "yield" and SFtype == "conservative":
+            print(f"\nConservative safety factor against yielding: {ny:.3f}\n\n")
+        elif SF == "fatigue" and SFtype == "goodman":
+            print(f"\nGoodman safety factor against fatigue: {nf:.3f}\n\n")
+
+        break
+
+# ===================================================================
+#                 DIAMETER SOLVERS (BISECTION METHOD)
+# ===================================================================
+
+def ConservativeDiameter(n, Sut, Sy, condition, system, finish, iter_estimate, Ma, Mm, Ta, Tm):
+    """
+    Solves for shaft diameter using conservative yield criterion.
+
+    Uses Bisection Method to solve:
+        f(d) = calculated_safety_factor(d) - target_safety_factor
+
+    Root occurs when safety factor equals desired value.
+    """
+
+    # ===================================================================
+    #                INITIAL BOUNDS AND SETUP FOR BISECTION
+    # ===================================================================
+
+    xl = 0.1          # Lower bound for diameter
+    xu = 10.0         # Upper bound for diameter
+    tol = 0.0001      # Convergence tolerance
+    max_iter = 10000  # Max iterations
+
+    # ===================================================================
+    #     FUNCTION TO COMPUTE SAFETY FACTOR DIFFERENCE FOR BISECTION
+    # ===================================================================
+
+    def f(d):
+        """Returns n_sf(d) - n. Bisection finds where this equals zero."""
+        
+        # Hardcode conservative yield
+        SF_inner = "yield"
+        SFtype_inner = "conservative"
+
+        # Recalculate everything at this diameter
+        Se = EnduranceLimit(Sut, system, finish, condition, d)
+        Kf, Kfs = StressConcentration(condition, system, Sut, iter_estimate, d)
+        sigma_max_prime, sigma_a_prime, sigma_m_prime, A, B, sigma_m, sigma_a = ShaftStresses(Kf, Kfs, Ma, Mm, Ta, Tm, d)
+        ny, nf = SafetyFactor(Sy, sigma_max_prime, sigma_a_prime, sigma_m_prime, SF_inner, SFtype_inner, Se, Sut, sigma_m, sigma_a, d, A, B)
+
+        return ny - n  # Zero when computed safety factor matches target
+
+    # ===================================================================
+    #   INITIALIZING BISECTION WITH A CHECK FOR A ROOT IN THE INTERVAL
+    # ===================================================================
+
+    f_xl = f(xl)
+    f_xu = f(xu)
+
+    if f_xl * f_xu > 0:
+        print("\nNo sign change between bounds — bisection cannot find a root.")
+        print(f"  f({xl}) = {f_xl:.4f}, f({xu}) = {f_xu:.4f}")
+        print("Try adjusting your target safety factor or input values.\n")
+        return None
+
+    # ===================================================================
+    #                         BISECTION METHOD
+    # ===================================================================
+
+    for i in range(max_iter):
+        d = (xl + xu) / 2  # Midpoint — current best guess
+
+        f_d = f(d)
+
+        # Check convergence: interval is small enough
+        if abs(xu - xl) / 2 < tol:
+            print(f"\nConservative diameter: {d:.4f} after {i+1} iterations.")
+            return d
+
+        # Narrow the interval toward the root
+        if f_xl * f_d < 0:
+            xu = d          # Root is in left half
+        else:
+            xl = d          # Root is in right half
+            f_xl = f_d      # Update f_xl to match new lower bound
+
+    print("\nWarning: max iterations reached. Returning best estimate.")
+    return d
+
+def GoodmanDiameter(n, Sut, Sy, condition, system, finish, iter_estimate, Ma, Mm, Ta, Tm):
+    """
+    Solves for diameter using Goodman fatigue criterion.
+    Uses same bisection logic as ConservativeDiameter().
+    """
+
+    # ===================================================================
+    #                INITIAL BOUNDS AND SETUP FOR BISECTION
+    # ===================================================================
+
+    xl = 0.1          # Lower bound for diameter
+    xu = 10.0         # Upper bound for diameter
+    tol = 0.0001      # Convergence tolerance
+    max_iter = 10000  # Max iterations
+
+    # ===================================================================
+    #     FUNCTION TO COMPUTE SAFETY FACTOR DIFFERENCE FOR BISECTION
+    # ===================================================================
+
+    def f(d):
+        """Returns n_sf(d) - n. Bisection finds where this equals zero."""
+        
+        # Hardcode Goodman fatigue
+        SF_inner = "fatigue"
+        SFtype_inner = "goodman"
+
+        # Recalculate everything at this diameter
+        Se = EnduranceLimit(Sut, system, finish, condition, d)
+        Kf, Kfs = StressConcentration(condition, system, Sut, iter_estimate, d)
+        sigma_max_prime, sigma_a_prime, sigma_m_prime, A, B, sigma_m, sigma_a = ShaftStresses(Kf, Kfs, Ma, Mm, Ta, Tm, d)
+        ny, nf = SafetyFactor(Sy, sigma_max_prime, sigma_a_prime, sigma_m_prime, SF_inner, SFtype_inner, Se, Sut, sigma_m, sigma_a, d, A, B)
+
+        return nf - n  # Zero when computed safety factor matches target
+
+    # ===================================================================
+    #   INITIALIZING BISECTION WITH A CHECK FOR A ROOT IN THE INTERVAL
+    # ===================================================================
+
+    f_xl = f(xl)
+    f_xu = f(xu)
+
+    if f_xl * f_xu > 0:
+        print("\nNo sign change between bounds — bisection cannot find a root.")
+        print(f"  f({xl}) = {f_xl:.4f}, f({xu}) = {f_xu:.4f}")
+        print("Try adjusting your target safety factor or input values.\n")
+        return None
+
+    # ===================================================================
+    #                         BISECTION METHOD
+    # ===================================================================
+
+    for i in range(max_iter):
+        d = (xl + xu) / 2  # Midpoint — current best guess
+
+        f_d = f(d)
+
+        # Check convergence: interval is small enough
+        if abs(xu - xl) / 2 < tol:
+            print(f"\nGoodman diameter: {d:.4f} after {i+1} iterations.")
+            return d
+
+        # Narrow the interval toward the root
+        if f_xl * f_d < 0:
+            xu = d          # Root is in left half
+        else:
+            xl = d          # Root is in right half
+            f_xl = f_d      # Update f_xl to match new lower bound
+
+    print("\nWarning: max iterations reached. Returning best estimate.")
+    return d
+
+# ===================================================================
+#           SAFETY FACTOR AND STRESS CALCULATION FUNCTIONS
+# ===================================================================
+
+def EnduranceLimit(Sut, system, finish, condition, d):
+    """
+    Calculates the corrected endurance limit (Se) of the shaft material.
+
+    PARAMETERS:
+    Sut       : Ultimate tensile strength (KSI or MPa)
+    system    : 'imperial' or 'metric'
+    finish    : Surface finish of shaft
+    condition : Loading type (bending, torsion, axial, combined)
+    d         : Shaft diameter
+
+    RETURNS:
+    Se : Fully corrected endurance limit
+
+    METHOD:
+    1) Determine base endurance limit (Se')
+    2) Apply Marin correction factors:
+        - Surface finish factor (ka)
+        - Size factor (kb)
+        - Load factor (kc)
+        - Temperature factor (kd)
+        - Reliability factor (ke)
+        - Miscellaneous factor (kf)
+    3) Multiply all factors together
+    """
+
+    # Endurance limit without correction factors (Se')
+    if system == "imperial":
+        if Sut <= 200:     # KSI
+            Se_prime = 0.5 * Sut
+        else:
+            Se_prime = 100 # KSI
+    elif system == "metric":
+        if Sut <= 1400:    # MPa
+            Se_prime = 0.5 * Sut
+        else:
+            Se_prime = 700 # MPa
+
+    # Surface Finish Variables
+    if system == "imperial":
+        if finish == "ground":
+            a = 1.21 # Sut in KSI
+            b = -0.067
+        elif finish == "machined" or finish == "cold-drawn":
+            a = 2.00 # Sut in KSI
+            b = -0.217
+        elif finish == "hot-rolled":
+            a = 11.0 # Sut in KSI
+            b = -0.65
+        elif finish == "as-forged":
+            a = 12.7 # Sut in KSI
+            b = -0.758
+        else:
+            print(f"\nError: '{finish}' is not a valid finish. Please enter 'ground', 'machined', or 'hot-rolled'.\n")
+    elif system == "metric":
+        if finish == "ground":
+            a = 1.38 # Sut in MPa
+            b = -0.067
+        elif finish == "machined" or finish == "cold-drawn":
+            a = 3.04 # Sut in MPa
+            b = -0.217
+        elif finish == "hot-rolled":
+            a = 38.6 # Sut in MPa
+            b = -0.65
+        elif finish == "as-forged":
+            a = 54.9 # Sut in MPa
+            b = -0.758
+        else:
+            print(f"\nError: '{finish}' is not a valid finish. Please enter 'ground', 'machined', or 'hot-rolled'.\n")
+    else:
+        print(f"\nError: '{system}' is not a valid measurement system. Please enter 'imperial' or 'metric'.\n")
+
+    # Endurance Limit factors
+    ka = a * (Sut ** b)
+    if condition == "axial":
+        kb = 1.0
+    elif condition == "bending" or condition == "torsion" or condition == "combined":
+        if system == "imperial":
+            if d >= 0.3 and d <= 2.0:   # inches
+                kb = (d/0.3)**-0.107
+            elif d > 2.0 and d <= 10.0: # inches
+                kb = 0.91*d**-0.157
+            elif d < 0.3:               # inches
+                kb = 1.0
+            else:
+                print(f"\nError: '{d}' is not a valid diameter for the bending condition. Please enter a diameter between 0.3 and 10 inches.\n")
+        elif system == "metric":
+            if d >= 7.62 and d <= 51: # mm
+                kb = (d/7.62)**-0.107
+            elif d > 51 and d <= 254: # mm
+                kb = 1.51*d**-0.157
+            elif d < 7.62:            # mm
+                kb = 1.0
+            else:
+                print(f"\nError: '{d}' is not a valid diameter for the bending condition. Please enter a diameter between 8 and 250 mm.\n")
+    if condition == "bending" or condition == "combined":
+        kc = 1.0  # Assuming torsion in combination with bending or axial loading when 'combined' is selected
+    elif condition == "torsion":
+        kc = 0.59
+    elif condition == "axial":
+        kc = 0.85
+    else:
+        print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+    kd = 1.0 # Assuming the endurance limit, Se_prime, is available or estimated based on the Sut value of the material
+    ke = 1.0 # Project description assumes no additional information is given about the reliability; assuming a reliability of 50% which corresponds to a factor of 1.0
+    kf = 1.0 
+
+    # Calculate the endurance limit with factors
+    Se = Se_prime * ka * kb * kc * kd * ke * kf
+
+    return Se
+
+def SafetyFactor(Sy, sigma_max_prime, sigma_a_prime, sigma_m_prime, SF, SFtype, Se, Sut, sigma_m, sigma_a, d, A, B):
+    """
+    Calculates safety factor against yielding or fatigue failure.
+
+    PARAMETERS:
+    Sy                : Yield strength
+    sigma_max_prime   : Maximum Von Mises stress
+    sigma_a_prime     : Alternating Von Mises stress
+    sigma_m_prime     : Mean Von Mises stress
+    SF                : 'yield' or 'fatigue'
+    SFtype            : Method (von mises, conservative, goodman)
+    Se                : Endurance limit
+    Sut               : Ultimate strength
+    sigma_m           : Mean normal stress
+    sigma_a           : Alternating normal stress
+    d, A, B           : Parameters used in Goodman equation
+
+    RETURNS:
+    ny : Yield safety factor
+    nf : Fatigue safety factor
+
+    METHODS IMPLEMENTED:
+    - Von Mises Yield Criterion
+    - Conservative Yield Criterion
+    - Modified Goodman Fatigue Criterion
+    """
+
+    # Initialize safety factors to None
+    ny = None
+    nf = None
+
+    # Yield safety factor calculations
+    if SF == "yield":
+        if SFtype == "von mises":
+            ny = Sy / sigma_max_prime
+        elif SFtype == "conservative":
+            ny = Sy / (sigma_a_prime + sigma_m_prime)
+        else:
+            print(f"\nError: '{SFtype}' is not a valid type of safety factor. Please enter 'von mises' or 'conservative'.\n")
+    
+    # Fatigue safety factor calculations
+    elif SF == "fatigue":
+        if SFtype == "goodman":
+            nf = (np.pi * d**3 / 16) * ((A / (1000 * Se)) + (B / (1000 * Sut)))**-1
+        else:
+            print(f"\nError: '{SFtype}' is not a valid type of safety factor. Please enter 'goodman'.\n")
+    else:
+        print(f"\nError: '{SF}' is not a valid type of safety factor. Please enter 'yield' or 'fatigue'.\n")
+
+    return ny, nf
+
+def ShaftStresses(Kf, Kfs, Ma, Mm, Ta, Tm, d):
+    """
+    Computes alternating and mean stresses in the shaft.
+
+    PARAMETERS:
+    Kf  : Fatigue stress concentration factor (normal)
+    Kfs : Fatigue stress concentration factor (shear)
+    Ma  : Alternating bending moment
+    Mm  : Mean bending moment
+    Ta  : Alternating torque
+    Tm  : Mean torque
+    d   : Shaft diameter
+
+    RETURNS:
+    sigma_max_prime : Maximum Von Mises stress
+    sigma_a_prime   : Alternating Von Mises stress
+    sigma_m_prime   : Mean Von Mises stress
+    A, B            : Simplified load expressions for fatigue equation
+    sigma_m         : Mean normal stress
+    sigma_a         : Alternating normal stress
+
+    METHOD:
+    - Compute bending and torsional stresses
+    - Apply stress concentration factors
+    - Compute Von Mises equivalent stresses
+    - Compute combined load parameters (A and B)
+    """
+
+    # Calculating the alternating stresses
+    sigma_a = (32 * Ma * Kf) / (np.pi * d**3 * 1000)
+    tau_a = (Kfs * 16 * Ta) / (np.pi * d**3 * 1000) # Assuming no alternating torque, so the alternating shear stress is zero
+
+    # Calculating the mean stresses
+    sigma_m = (Kf * 32 * Mm) / (np.pi * d**3 * 1000) # Assuming no mean bending moment, so the mean normal stress is zero
+    tau_m = (16 * Tm * Kfs) / (np.pi * d**3 * 1000)
+
+    # Variables for simplification
+    A = np.sqrt(4*(Kf*Ma)**2 + 3*(Kfs*Ta)**2)
+    B = np.sqrt(4*(Kf*Mm)**2 + 3*(Kfs*Tm)**2)
+
+    # Calculating the alternating Von Mises stress
+    sigma_a_prime = np.sqrt(sigma_a**2 + 3*tau_a**2)
+
+    # Calculating the mean Von Mises stress
+    sigma_m_prime = np.sqrt(sigma_m**2 + 3*tau_m**2)
+
+    # Calculating the Maximum Von Mises stress
+    sigma_max_prime = np.sqrt((sigma_m + sigma_a)**2 + 3*(tau_m + tau_a)**2)
+
+    return sigma_max_prime, sigma_a_prime, sigma_m_prime, A, B, sigma_m, sigma_a
+
+def StressConcentration(condition, system, Sut, iter_estimate, d):
+    """
+    Calculates fatigue stress concentration factors (Kf and/or Kfs).
+
+    PARAMETERS:
+    condition     : Type of loading (bending, torsion, axial, combined)
+    system        : Unit system (imperial or metric)
+    Sut           : Ultimate tensile strength
+    iter_estimate : Geometric assumption (keyway, groove, radius type)
+    d             : Shaft diameter
+
+    RETURNS:
+    Kf  : Fatigue stress concentration factor (normal stress)
+    Kfs : Fatigue stress concentration factor (shear stress)
+
+    METHOD:
+    1) Assign theoretical stress concentration factors (Kt, Kts)
+    2) Estimate notch radius R
+    3) Compute Neuber constant (material dependent)
+    4) Compute notch sensitivity (q or qs)
+    5) Compute fatigue stress concentration factors:
+            Kf  = 1 + q (Kt - 1)
+            Kfs = 1 + qs (Kts - 1)
+    """
+    
+    # Step 1: Assign theoretical stress concentration factors (Kt, Kts) and notch radius (R) based on geometry and loading condition
+    if iter_estimate == "ring-groove":
+        if condition == "bending" or condition == "axial":
+            Kt = 5.0
+            R = 0.01 # inches
+        elif condition == "torsion":
+            Kts = 3.0
+            R = 0.01 # inches
+        elif condition == "combined":
+            Kt = 5.0
+            Kts = 3.0
+            R = 0.01 # inches
+        else:
+            print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+    elif iter_estimate == "keyway":
+        if condition == "bending":
+            Kt = 2.14
+            R = 0.02 * d # inches
+        elif condition == "torsion":
+            Kts = 3.0
+            R = 0.02 * d # inches
+        elif condition == "combined":
+            Kt = 2.14
+            Kts = 3.0
+            R = 0.02 * d # inches
+        else:
+            print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+    elif iter_estimate == "wide radius":
+        if condition == "bending": 
+            Kt = 1.7
+            R = 0.1 * d # inches
+        elif condition == "torsion":
+            Kts = 1.5
+            R = 0.1 * d # inches
+        elif condition == "axial":
+            Kt = 1.9
+            R = 0.1 * d # inches
+        elif condition == "combined":
+            Kt = 1.7
+            Kts = 1.5
+            R = 0.1 * d # inches
+        else:
+            print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+    elif iter_estimate == "sharp radius":
+        if condition == "bending": 
+            Kt = 2.7
+            R = 0.02 * d # inches
+        elif condition == "torsion":
+            Kts = 2.2
+            R = 0.02 * d # inches
+        elif condition == "axial":
+            Kt = 3.0
+            R = 0.02 * d # inches
+        elif condition == "combined":
+            Kt = 2.7
+            Kts = 2.2
+            R = 0.02 * d # inches
+        else:
+            print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+    else:
+        print(f"\nError: '{iter_estimate}' is not a valid stress concentration factor type. Please enter 'ring-groove', 'keyway', 'wide radius', or 'sharp radius'.\n")
+
+    # Step 2: Compute Neuber constant based on material properties and loading condition
+    if condition == "bending" or condition == "axial":
+        if system == "imperial":
+            if Sut >= 50 and Sut <= 250:   # KSI
+                Neuber = 0.246 - 3.08e-3 * Sut + 1.51e-5 * Sut**2 - 2.67e-8 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the bending or axial condition. Please enter a value between 50 and 250 KSI.\n")
+        elif system == "metric":
+            if Sut >= 340 and Sut <= 1700: # MPa
+                Neuber = 1.24 - 2.25e-3 * Sut + 1.6e-6 * Sut**2 - 4.11e-10 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the bending or axial condition. Please enter a value between 340 and 1700 MPa.\n")
+    elif condition == "torsion":
+        if system == "imperial":
+            if Sut >= 50 and Sut <= 220:   # KSI
+                Neuber = 0.190 - 2.51e-3 * Sut + 1.35e-5 * Sut**2 - 2.67e-8 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the torsion condition. Please enter a value between 50 and 220 KSI.\n")
+        elif system == "metric":
+            if Sut >= 340 and Sut <= 1500: # MPa
+                Neuber = 0.958 - 1.83e-3 * Sut + 1.43e-6 * Sut**2 - 4.11e-10 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the torsion condition. Please enter a value between 340 and 1500 MPa.\n")
+    elif condition == "combined":
+        if system == "imperial":
+            if (Sut >= 50 and Sut <= 220): # KSI
+                Neuber_b = 0.246 - 3.08e-3 * Sut + 1.51e-5 * Sut**2 - 2.67e-8 * Sut**3
+                Neuber_t = 0.190 - 2.51e-3 * Sut + 1.35e-5 * Sut**2 - 2.67e-8 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the combined condition. Please enter a value between 50 and 220 KSI.\n")
+        elif system == "metric":
+            if Sut >= 340 and Sut <= 1500: # MPa
+                Neuber_b = 1.24 - 2.25e-3 * Sut + 1.6e-6 * Sut**2 - 4.11e-10 * Sut**3
+                Neuber_t = 0.958 - 1.83e-3 * Sut + 1.43e-6 * Sut**2 - 4.11e-10 * Sut**3
+            else:
+                print(f"\nError: '{Sut}' is not a valid ultimate tensile strength for the combined condition. Please enter a value between 340 and 1500 MPa.\n")
+        else:
+            print(f"\nError: '{system}' is not a valid system. Please enter 'imperial' or 'metric'.\n")
+
+    # Step 3: Compute notch sensitivity (q or qs) and fatigue stress concentration factors (Kf, Kfs)
+    if condition == "bending" or condition == "axial":
+        q = 1/(1 + (Neuber/np.sqrt(R)))
+    elif condition == "torsion":
+        qs = 1/(1 + (Neuber/np.sqrt(R)))
+    elif condition == "combined":
+        q = 1/(1 + (Neuber_b/np.sqrt(R)))
+        qs = 1/(1 + (Neuber_t/np.sqrt(R)))
+    else:
+        print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', or 'axial'.\n")
+
+    # Step 4: Compute fatigue stress concentration factors (Kf, Kfs)
+    Kf = None
+    Kfs = None
+    if condition == "bending" or condition == "axial":
+        Kf = 1.0 + q * (Kt - 1.0)
+    elif condition == "torsion":
+        Kfs = 1.0 + qs * (Kts - 1.0)
+    elif condition == "combined":
+        Kf = 1.0 + q * (Kt - 1.0)
+        Kfs = 1.0 + qs * (Kts - 1.0)
+    else:
+        print(f"\nError: '{condition}' is not a valid shaft stress condition. Please enter 'bending', 'torsion', 'axial', or 'combined'.\n")
+
+    return Kf, Kfs
+
+if __name__ == "__main__":
+    main()
